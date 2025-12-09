@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/analyzer" },
+    { "path": "./packages/web" }
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@spec/analyzer/*": ["packages/analyzer/src/*"],
+      "@spec/web/*": ["packages/web/*"]
+    }
+  }
+}

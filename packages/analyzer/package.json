@@ -1,0 +1,27 @@
+{
+  "name": "@spec/analyzer",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "gen:parser": "node ../../packages/scripts/gen-parser.js",
+    "build": "node build.js",
+    "clean": "rimraf dist parser",
+    "prepare": "pnpm run gen:parser && pnpm run build"
+  },
+  "dependencies": {
+    "antlr4ts": "0.5.0-alpha.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "module": "commonjs",
+    "target": "es2020",
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"]
+}
