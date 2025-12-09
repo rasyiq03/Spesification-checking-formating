@@ -16,7 +16,7 @@ options { language = TypeScript; }
         super.notifyErrorListeners("Syntax Error" + location + ": " + msg, offendingToken, e);
     }
 
-    public override recover(recognizer: any, e: any): void {
+    public override recover(e: any): void {
         const follow = new Set([
             SpecParser.RBRACE,
             SpecParser.LBRACE,
@@ -24,10 +24,10 @@ options { language = TypeScript; }
             SpecParser.COMMA,
         ]);
 
-        let tok = recognizer.getInputStream().LT(1);
+        let tok = this.getInputStream().LT(1);
         while (tok && !follow.has(tok.type) && tok.type !== -1) {
-            recognizer.consume();
-            tok = recognizer.getInputStream().LT(1);
+            this.consume();
+            tok = this.getInputStream().LT(1);
         }
     }
 }
