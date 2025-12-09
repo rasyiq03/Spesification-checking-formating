@@ -15,21 +15,6 @@ options { language = TypeScript; }
         
         super.notifyErrorListeners("Syntax Error" + location + ": " + msg, offendingToken, e);
     }
-
-    public override recover(e: any): void {
-        const follow = new Set([
-            SpecParser.RBRACE,
-            SpecParser.LBRACE,
-            SpecParser.SEMI,
-            SpecParser.COMMA,
-        ]);
-
-        let tok = this.getInputStream().LT(1);
-        while (tok && !follow.has(tok.type) && tok.type !== -1) {
-            this.consume();
-            tok = this.getInputStream().LT(1);
-        }
-    }
 }
 
 // @lexer::members TELAH DIHAPUS UNTUK MEMPERBAIKI BUILD ERROR
