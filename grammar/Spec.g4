@@ -1,10 +1,5 @@
-/**
- * Grammar ANTLR4 "Spec" - Versi Gabungan (Hybrid)
- * Menggabungkan struktur rapi Versi 2 dengan fungsionalitas & perbaikan bug Versi 1.
- */
 grammar Spec;
 
-// Mengatur target bahasa output menjadi TypeScript
 options { language = TypeScript; }
 
 // ======================================================
@@ -12,15 +7,7 @@ options { language = TypeScript; }
 // ======================================================
 
 @parser::members {
-    /**
-     * Meng-override fungsi notifikasi error bawaan ANTLR.
-     * Tujuannya: Memberikan pesan error yang lebih presisi dengan baris dan kolom.
-     */
     public override notifyErrorListeners(msg: any, offendingToken: any, e: any): void {
-        // [PERBAIKAN DARI VERSI 1]
-        // Kita menggunakan 'charPositionInLine', bukan 'column'.
-        // Properti 'column' tidak ada di standar Token TypeScript ANTLR,
-        // jadi perbaikan ini mencegah error saat kompilasi (TS2339).
         const location = offendingToken && offendingToken.line !== undefined
             ? ` at line ${offendingToken.line}, column ${offendingToken.charPositionInLine}`
             : "";
@@ -28,34 +15,22 @@ options { language = TypeScript; }
         super.notifyErrorListeners("Syntax Error" + location + ": " + msg, offendingToken, e);
     }
 
-    /**
-     * Strategi pemulihan (Recovery) saat terjadi syntax error.
-     * Jika parser bingung, ia akan mencoba melewati token sampah sampai
-     * menemukan karakter 'aman' (seperti kurung kurawal atau titik koma)
-     * agar tidak langsung crash total.
-     */
     public override recover(recognizer: any, e: any): void {
         const follow = new Set([
-            SpecParser.RBRACE, // }
-            SpecParser.LBRACE, // {
-            SpecParser.SEMI,   // ;
-            SpecParser.COMMA,  // ,
+            SpecParser.RBRACE,
+            SpecParser.LBRACE,
+            SpecParser.SEMI,
+            SpecParser.COMMA,
         ]);
 
         let tok = recognizer.getInputStream().LT(1);
-        while (tok && !follow.has(tok.type) && tok.type !== -1) { // -1 adalah EOF
-            recognizer.consume(); // Makan token sampah
+        while (tok && !follow.has(tok.type) && tok.type !== -1) {
+            recognizer.consume();
             tok = recognizer.getInputStream().LT(1);
         }
     }
 }
 
-@lexer::members {
-    // Menangani karakter aneh di level Lexer sebelum masuk Parser
-    public override notifyErrorListeners(msg: any): void {
-        super.notifyErrorListeners("Invalid Character: " + msg);
-    }
-}
 
 // ======================================================
 // 2. TOP LEVEL STRUCTURE (Struktur Utama)
