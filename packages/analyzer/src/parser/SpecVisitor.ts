@@ -8,18 +8,12 @@ import { SystemDeclContext } from "./SpecParser";
 import { FeatureDeclContext } from "./SpecParser";
 import { InputDeclContext } from "./SpecParser";
 import { OutputDeclContext } from "./SpecParser";
-import { ValueDeclContext } from "./SpecParser";
-import { FreeExprDeclContext } from "./SpecParser";
 import { PreconditionDeclContext } from "./SpecParser";
 import { PostconditionDeclContext } from "./SpecParser";
-import { TestObligationDeclContext } from "./SpecParser";
 import { RuleDeclContext } from "./SpecParser";
 import { IfThenEffectContext } from "./SpecParser";
-import { EffectListContext } from "./SpecParser";
-import { EffectContext } from "./SpecParser";
+import { EffectBlockContext } from "./SpecParser";
 import { AssignmentEffectContext } from "./SpecParser";
-import { ActionEffectContext } from "./SpecParser";
-import { FunctionCallContext } from "./SpecParser";
 import { ExprContext } from "./SpecParser";
 import { OrExprContext } from "./SpecParser";
 import { AndExprContext } from "./SpecParser";
@@ -30,15 +24,8 @@ import { MultiplicativeExprContext } from "./SpecParser";
 import { UnaryExprContext } from "./SpecParser";
 import { PrimaryExprContext } from "./SpecParser";
 import { IdListContext } from "./SpecParser";
-import { ArgListContext } from "./SpecParser";
 import { PathContext } from "./SpecParser";
-import { AnnotationContext } from "./SpecParser";
-import { AnnotationArgsContext } from "./SpecParser";
-import { AnnotationArgContext } from "./SpecParser";
 import { LiteralContext } from "./SpecParser";
-import { ArrayLiteralContext } from "./SpecParser";
-import { ObjectLiteralContext } from "./SpecParser";
-import { ObjectPairContext } from "./SpecParser";
 import { CompOpContext } from "./SpecParser";
 
 
@@ -86,20 +73,6 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	visitOutputDecl?: (ctx: OutputDeclContext) => Result;
 
 	/**
-	 * Visit a parse tree produced by `SpecParser.valueDecl`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitValueDecl?: (ctx: ValueDeclContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.freeExprDecl`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitFreeExprDecl?: (ctx: FreeExprDeclContext) => Result;
-
-	/**
 	 * Visit a parse tree produced by `SpecParser.preconditionDecl`.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -112,13 +85,6 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	 * @return the visitor result
 	 */
 	visitPostconditionDecl?: (ctx: PostconditionDeclContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.testObligationDecl`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitTestObligationDecl?: (ctx: TestObligationDeclContext) => Result;
 
 	/**
 	 * Visit a parse tree produced by `SpecParser.ruleDecl`.
@@ -135,18 +101,11 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	visitIfThenEffect?: (ctx: IfThenEffectContext) => Result;
 
 	/**
-	 * Visit a parse tree produced by `SpecParser.effectList`.
+	 * Visit a parse tree produced by `SpecParser.effectBlock`.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	visitEffectList?: (ctx: EffectListContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.effect`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitEffect?: (ctx: EffectContext) => Result;
+	visitEffectBlock?: (ctx: EffectBlockContext) => Result;
 
 	/**
 	 * Visit a parse tree produced by `SpecParser.assignmentEffect`.
@@ -154,20 +113,6 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	 * @return the visitor result
 	 */
 	visitAssignmentEffect?: (ctx: AssignmentEffectContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.actionEffect`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitActionEffect?: (ctx: ActionEffectContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.functionCall`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitFunctionCall?: (ctx: FunctionCallContext) => Result;
 
 	/**
 	 * Visit a parse tree produced by `SpecParser.expr`.
@@ -240,13 +185,6 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	visitIdList?: (ctx: IdListContext) => Result;
 
 	/**
-	 * Visit a parse tree produced by `SpecParser.argList`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitArgList?: (ctx: ArgListContext) => Result;
-
-	/**
 	 * Visit a parse tree produced by `SpecParser.path`.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -254,53 +192,11 @@ export interface SpecVisitor<Result> extends ParseTreeVisitor<Result> {
 	visitPath?: (ctx: PathContext) => Result;
 
 	/**
-	 * Visit a parse tree produced by `SpecParser.annotation`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitAnnotation?: (ctx: AnnotationContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.annotationArgs`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitAnnotationArgs?: (ctx: AnnotationArgsContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.annotationArg`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitAnnotationArg?: (ctx: AnnotationArgContext) => Result;
-
-	/**
 	 * Visit a parse tree produced by `SpecParser.literal`.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
 	visitLiteral?: (ctx: LiteralContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.arrayLiteral`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitArrayLiteral?: (ctx: ArrayLiteralContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.objectLiteral`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitObjectLiteral?: (ctx: ObjectLiteralContext) => Result;
-
-	/**
-	 * Visit a parse tree produced by `SpecParser.objectPair`.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	visitObjectPair?: (ctx: ObjectPairContext) => Result;
 
 	/**
 	 * Visit a parse tree produced by `SpecParser.compOp`.

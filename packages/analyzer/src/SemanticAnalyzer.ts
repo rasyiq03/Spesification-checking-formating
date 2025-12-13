@@ -1,15 +1,21 @@
-// packages/analyzer/src/SemanticAnalyzer.ts
-// Final SemanticAnalyzer (production-ready)
-// - Preserves duplicate occurrences when collecting id lists (important!)
-// - Reports DUPLICATE_INPUT / DUPLICATE_OUTPUT / DUPLICATE_RULE_NAME / UNDEFINED_VARIABLE / ASSIGN_TO_READONLY / UNUSED_INPUT
-// - Robust AST introspection (doesn't rely on generated type names)
+/**
+ * SemanticAnalyzer for Requirement Specification DSL
+ *
+ * Purpose:
+ * - Detect requirement defects early (ambiguity, inconsistency, incompleteness)
+ *
+ * Academic basis:
+ * - Sommerville (2016): Software Engineering
+ * - ISO/IEC/IEEE 29148:2018
+ * - Fowler (2011): Domain-Specific Languages
+ */
 
 import { CommonTokenStream } from 'antlr4ts';
 import { TerminalNode } from 'antlr4ts/tree';
 
 export type Severity = 'error' | 'warning' | 'info';
 
-export type Diagnostic = {
+export interface Diagnostic {
   severity: Severity;
   code: string;
   message: string;
@@ -21,485 +27,275 @@ export type Diagnostic = {
     rule?: string;
   };
   recommendation?: string;
-  meta?: Record<string, any>;
-};
+}
 
-type SymbolTable = {
-  inputs: Set<string>;
-  outputs: Set<string>;
-  locals: Set<string>;
+interface SymbolTable {
+  inputs: Set<string>;     // read-only
+  outputs: Set<string>;    // writable
   rules: Set<string>;
   used: Set<string>;
-};
+}
 
+/**
+ * NOTE:
+ * Analyzer intentionally avoids type inference or execution semantics.
+ * This DSL validates requirement quality, not behavior.
+ */
 export class SemanticAnalyzer {
-  tokenStream: CommonTokenStream;
-  diagnostics: Diagnostic[] = [];
 
-  currentSystem?: string;
-  currentFeature?: string;
+  private diagnostics: Diagnostic[] = [];
+  private tables = new Map<string, SymbolTable>();
 
-  private tables: Map<string, SymbolTable> = new Map();
-  private reservedKeywords = new Set([
-    'system','feature','input','output','precondition','postcondition',
-    'test_obligation','rule','if','then','do','and','or','not','true','false'
+  private currentSystem?: string;
+  private currentFeature?: string;
+
+  private readonly keywords = new Set([
+    'system','feature','input','output','rule',
+    'if','then','do','and','or','not','true','false'
   ]);
-  private reportedSignatures: Set<string> = new Set();
 
-  constructor(tokenStream: CommonTokenStream) {
-    this.tokenStream = tokenStream;
-  }
+  constructor(private tokens: CommonTokenStream) {}
 
-  /**
-   * Synchronous analysis entry point.
-   * Returns array of Diagnostic.
-   */
-  analyze(root: any): Diagnostic[] {
-    // reset state
-    this.diagnostics = [];
-    this.currentSystem = undefined;
-    this.currentFeature = undefined;
-    this.tables.clear();
-    this.reportedSignatures.clear();
+  // =============================
+  // ENTRY POINT
+  // =============================
 
-    const systems = this.getChildrenByRuleName(root, 'systemDecl');
-    for (const sys of systems) {
-      this.processSystemDecl(sys);
-    }
+  analyze(ast: any): Diagnostic[] {
+    this.reset();
 
-    // post-check: unused inputs
-    for (const [key, table] of this.tables.entries()) {
-      const [sys, feat] = key.split('::');
-      this.currentSystem = sys;
-      this.currentFeature = feat;
-      for (const inp of Array.from(table.inputs)) {
-        if (!table.used.has(inp)) {
-          this.safeReport({
-            severity: 'info',
-            code: 'UNUSED_INPUT',
-            message: `Input '${inp}' in feature '${this.currentFeature}' appears unused.`,
-            location: { line: 0, column: 0, system: this.currentSystem, feature: this.currentFeature },
-            recommendation: `Remove or use '${inp}' in rules/conditions.`,
-            meta: { variable: inp },
-          });
-        }
-      }
-    }
+    const systems = this.find(ast, 'systemDecl');
+    systems.forEach(s => this.visitSystem(s));
 
-    this.currentSystem = undefined;
-    this.currentFeature = undefined;
-
+    this.checkUnusedInputs();
     return this.diagnostics;
   }
 
-  // -------------------------
-  // System / Feature processors
-  // -------------------------
-  private processSystemDecl(sysCtx: any) {
-    const sysName = this.getIdFromContext(sysCtx) || this.getText(sysCtx.name) || '<unknown-system>';
-    this.currentSystem = sysName;
+  private reset() {
+    this.diagnostics = [];
+    this.tables.clear();
+    this.currentSystem = undefined;
+    this.currentFeature = undefined;
+  }
 
-    const features = this.getChildrenByRuleName(sysCtx, 'featureDecl');
-    for (const f of features) {
-      this.processFeatureDecl(f);
-    }
+  // =============================
+  // SYSTEM / FEATURE
+  // =============================
+
+  private visitSystem(ctx: any) {
+    this.currentSystem = this.extractId(ctx) ?? '<system>';
+
+    this.find(ctx, 'featureDecl')
+      .forEach(f => this.visitFeature(f));
 
     this.currentSystem = undefined;
   }
 
-  private processFeatureDecl(featureCtx: any) {
-    const featName = this.getIdFromContext(featureCtx) || this.getText(featureCtx.name) || '<unknown-feature>';
-    this.currentFeature = featName;
+  private visitFeature(ctx: any) {
+    const feature = this.extractId(ctx) ?? '<feature>';
+    this.currentFeature = feature;
 
-    const key = `${this.currentSystem ?? '<unknown-system>'}::${featName}`;
-    const table: SymbolTable = { inputs: new Set(), outputs: new Set(), locals: new Set(), rules: new Set(), used: new Set() };
+    const key = `${this.currentSystem}::${feature}`;
+    const table: SymbolTable = {
+      inputs: new Set(),
+      outputs: new Set(),
+      rules: new Set(),
+      used: new Set()
+    };
     this.tables.set(key, table);
 
-    // collect inputs & outputs (preserve duplicates)
-    this.collectInputOutputFromFeature(featureCtx, table);
-
-    // rules
-    const ruleDecls = this.getChildrenByRuleName(featureCtx, 'ruleDecl');
-    for (const r of ruleDecls) {
-      const ruleName = this.getIdFromContext(r) || this.getText(r.name) || '<unknown-rule>';
-
-      // duplicate rule name
-      if (table.rules.has(ruleName)) {
-        this.safeReport({
-          severity: 'warning',
-          code: 'DUPLICATE_RULE_NAME',
-          message: `Rule '${ruleName}' declared multiple times in feature '${this.currentFeature}'.`,
-          location: this.locationOfNode(r),
-          recommendation: `Ensure rule names are unique.`,
-          meta: { rule: ruleName },
-        });
-      }
-      table.rules.add(ruleName);
-
-      // if-then condition
-      const ifThen = this.getChildByRuleName(r, 'ifThenEffect');
-      if (ifThen) {
-        const cond = this.getChildByRuleName(ifThen, 'condition');
-        if (cond) {
-          this.runUndefinedVarCheck(cond, table, `Variable referenced in rule condition is not defined in feature '${this.currentFeature}'`);
-        }
-
-        // effects
-        const effectList = this.getChildByRuleName(ifThen, 'effectList') || this.getChildByRuleName(ifThen, 'effects') || this.getChildByRuleName(ifThen, 'effectsList');
-        if (effectList) {
-          const effects = this.getChildrenByRuleName(effectList, 'effect');
-          for (const e of effects) {
-            this.runAssignChecks(e, table, ruleName);
-            const exprs = this.getChildrenByRuleName(e, 'expr');
-            for (const ex of exprs) {
-              this.runUndefinedVarCheck(ex, table, `Variable referenced in effect expression is not defined in feature '${this.currentFeature}'`);
-            }
-          }
-        } else {
-          const assigns = this.getChildrenByRuleName(ifThen, 'assignmentEffect');
-          for (const a of assigns) {
-            this.runAssignChecks(a, table, ruleName);
-            const right = this.getChildByRuleName(a, 'right') || this.getChildByRuleName(a, 'expr');
-            if (right) this.runUndefinedVarCheck(right, table, `Variable referenced in right-hand expression is not defined in feature '${this.currentFeature}'`);
-          }
-        }
-      }
-    }
-
-    // pre/post condition checks
-    const preconds = this.getChildrenByRuleName(featureCtx, 'preconditionDecl');
-    for (const p of preconds) {
-      this.runUndefinedVarCheck(p.condition, table, `Variable referenced in precondition is not defined in feature '${this.currentFeature}'`);
-    }
-    const postconds = this.getChildrenByRuleName(featureCtx, 'postconditionDecl');
-    for (const p of postconds) {
-      this.runUndefinedVarCheck(p.condition, table, `Variable referenced in postcondition is not defined in feature '${this.currentFeature}'`);
-    }
+    this.collectIO(ctx, table);
+    this.find(ctx, 'ruleDecl').forEach(r => this.visitRule(r, table));
 
     this.currentFeature = undefined;
   }
 
-  // -------------------------
-  // Checks helpers
-  // -------------------------
-  private runUndefinedVarCheck(ctx: any, symbols: SymbolTable, messagePrefix: string) {
-    if (!ctx) return;
-    const used = this.collectUsedBaseIds(ctx);
-    for (const u of used) {
-      if (!symbols.inputs.has(u) && !symbols.outputs.has(u) && !symbols.locals.has(u)) {
-        this.safeReport({
-          severity: 'error',
-          code: 'UNDEFINED_VARIABLE',
-          message: `${messagePrefix} '${u}'.`,
-          location: this.locationOfNode(ctx),
-          recommendation: `Declare '${u}' in input or output of feature '${this.currentFeature}'.`,
-          meta: { variable: u },
-        });
+  // =============================
+  // INPUT / OUTPUT
+  // =============================
+
+  /**
+   * Academic justification:
+   * - Duplicate declaration causes ambiguity (ISO 29148)
+   */
+  private collectIO(ctx: any, table: SymbolTable) {
+    this.collectDecl(ctx, 'inputDecl', table.inputs, 'DUPLICATE_INPUT');
+    this.collectDecl(ctx, 'outputDecl', table.outputs, 'DUPLICATE_OUTPUT');
+  }
+
+  private collectDecl(ctx: any, rule: string, target: Set<string>, code: string) {
+    this.find(ctx, rule).forEach(d => {
+      this.ids(d).forEach(id => {
+        if (target.has(id)) {
+          this.report('error', code,
+            `'${id}' declared multiple times`,
+            d,
+            `Remove duplicate declaration of '${id}'`
+          );
+        }
+        target.add(id);
+      });
+    });
+  }
+
+  // =============================
+  // RULE
+  // =============================
+
+  /**
+   * Rules define system behavior declaratively.
+   * Names must be unique for traceability.
+   */
+  private visitRule(ctx: any, table: SymbolTable) {
+    const name = this.extractId(ctx) ?? '<rule>';
+
+    if (table.rules.has(name)) {
+      this.report('warning','DUPLICATE_RULE_NAME',
+        `Rule '${name}' duplicated`,
+        ctx,
+        'Ensure rule names are unique'
+      );
+    }
+    table.rules.add(name);
+
+    // Condition
+    this.find(ctx,'condition')
+      .forEach(c => this.checkUsage(c, table));
+
+    // Effect
+    this.find(ctx,'assignmentEffect')
+      .forEach(e => this.checkAssignment(e, table, name));
+  }
+
+  // =============================
+  // SEMANTIC CHECKS
+  // =============================
+
+  /**
+   * Undefined variable → incomplete requirement
+   */
+  private checkUsage(ctx: any, table: SymbolTable) {
+    this.ids(ctx).forEach(id => {
+      if (!table.inputs.has(id) && !table.outputs.has(id)) {
+        this.report('error','UNDEFINED_VARIABLE',
+          `Variable '${id}' not declared`,
+          ctx,
+          `Declare '${id}' as input or output`
+        );
       } else {
-        symbols.used.add(u);
+        table.used.add(id);
       }
+    });
+  }
+
+  /**
+   * Assigning to input violates requirement responsibility
+   */
+  private checkAssignment(ctx: any, table: SymbolTable, rule: string) {
+    const left = this.find(ctx,'path')[0];
+    if (!left) return;
+
+    const id = this.ids(left)[0];
+    if (!id) return;
+
+    if (table.inputs.has(id) && !table.outputs.has(id)) {
+      this.report('error','ASSIGN_TO_READONLY',
+        `Input '${id}' assigned in rule '${rule}'`,
+        left,
+        `Move '${id}' to output`
+      );
     }
   }
 
-  private runAssignChecks(assignCtx: any, symbols: SymbolTable, ruleName: string) {
-    const assign = this.getChildByRuleName(assignCtx, 'assignmentEffect') || assignCtx;
-    if (!assign) return;
+  // =============================
+  // UNUSED INPUT
+  // =============================
 
-    const left = this.getChildByRuleName(assign, 'left') || this.getChildByRuleName(assign, 'path');
-    const right = this.getChildByRuleName(assign, 'right') || this.getChildByRuleName(assign, 'expr');
+  /**
+   * Over-specification → informational warning
+   */
+  private checkUnusedInputs() {
+    this.tables.forEach((t, key) => {
+      const [sys, feat] = key.split('::');
+      this.currentSystem = sys;
+      this.currentFeature = feat;
 
-    const leftBases = left ? this.collectBaseIdsFromPath(left) : [];
-    for (const lb of leftBases) {
-      if (symbols.inputs.has(lb) && !symbols.outputs.has(lb)) {
-        this.safeReport({
-          severity: 'error',
-          code: 'ASSIGN_TO_READONLY',
-          message: `Attempt to assign to '${lb}' in rule '${ruleName}', but '${lb}' is declared as input (read-only).`,
-          location: this.locationOfNode(left),
-          recommendation: `If '${lb}' should be writable, move it to outputs or declare it as both input/output.`,
-          meta: { variable: lb },
-        });
-      }
-
-      if (!symbols.inputs.has(lb) && !symbols.outputs.has(lb)) {
-        this.safeReport({
-          severity: 'error',
-          code: 'UNDEFINED_VARIABLE',
-          message: `Variable '${lb}' assigned in rule '${ruleName}' is not declared in feature '${this.currentFeature}'.`,
-          location: this.locationOfNode(left),
-          recommendation: `Declare '${lb}' in output of feature '${this.currentFeature}'.`,
-          meta: { variable: lb },
-        });
-      }
-    }
-
-    if (right) {
-      this.runUndefinedVarCheck(right, symbols, `Variable referenced in right-hand expression of rule '${ruleName}' is not defined`);
-    }
+      t.inputs.forEach(i => {
+        if (!t.used.has(i)) {
+          this.report('info','UNUSED_INPUT',
+            `Input '${i}' never used`,
+            undefined,
+            `Consider removing '${i}'`
+          );
+        }
+      });
+    });
   }
 
-  // -------------------------
-  // Robust AST helpers
-  // -------------------------
-  getText(node: any): string {
-    if (!node) return '';
-    try {
-      if (typeof node === 'string') return node;
-      if (node.text !== undefined) return node.text;
-      if (typeof node.getText === 'function') return node.getText();
-      if (node.symbol && node.symbol.text) return node.symbol.text;
-      if (node.getPayload && node.getPayload().getText) return node.getPayload().getText();
-      return String(node);
-    } catch {
-      return String(node);
-    }
+  // =============================
+  // UTILITIES
+  // =============================
+
+  private extractId(ctx: any): string | undefined {
+    return this.ids(ctx)[0];
   }
 
-  getIdFromContext(ctx: any): string | undefined {
-    if (!ctx) return undefined;
-    const terms = this.flattenTerminals(ctx);
-    for (const t of terms) {
-      if (!t || !t.symbol || !t.symbol.text) continue;
-      const txt = t.symbol.text;
-      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(txt) && !this.reservedKeywords.has(txt)) {
-        return txt;
+  private ids(ctx: any): string[] {
+    const out = new Set<string>();
+    this.terminals(ctx).forEach(t => {
+      const s = t.symbol.text;
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && !this.keywords.has(s)) {
+        out.add(s);
       }
-    }
-    return undefined;
+    });
+    return [...out];
   }
 
-  flattenTerminals(ctx: any): TerminalNode[] {
+  private terminals(ctx: any): TerminalNode[] {
     const out: TerminalNode[] = [];
-    (function walk(node: any) {
-      if (!node) return;
-      if (!node.children || node.children.length === 0) {
-        if (node.symbol) out.push(node);
-        return;
-      }
-      for (const ch of node.children) walk(ch);
+    (function walk(n: any) {
+      if (!n) return;
+      if (n.symbol) out.push(n);
+      if (n.children) n.children.forEach(walk);
     })(ctx);
     return out;
   }
 
-  flattenNodes(ctx: any): any[] {
+  private find(ctx: any, name: string): any[] {
     const out: any[] = [];
-    (function walk(node: any) {
-      if (!node) return;
+    for (const k in ctx) {
+      const v = ctx[k];
+      if (!v) continue;
+      if (Array.isArray(v)) v.forEach(x => this.match(x,name,out));
+      else this.match(v,name,out);
+    }
+    return out;
+  }
+
+  private match(node: any, name: string, out: any[]) {
+    if (node?.constructor?.name?.toLowerCase().includes(name.toLowerCase())) {
       out.push(node);
-      if (!node.children) return;
-      for (const ch of node.children) walk(ch);
-    })(ctx);
-    return out;
-  }
-
-  getChildrenByRuleName(ctx: any, ruleName: string): any[] {
-    if (!ctx) return [];
-    const out: any[] = [];
-    for (const key of Object.keys(ctx)) {
-      const val = (ctx as any)[key];
-      if (!val) continue;
-      if (Array.isArray(val)) {
-        for (const e of val) {
-          if (e && e.constructor && e.constructor.name && e.constructor.name.toLowerCase().includes(ruleName.toLowerCase())) out.push(e);
-        }
-      } else {
-        if (val && val.constructor && val.constructor.name && val.constructor.name.toLowerCase().includes(ruleName.toLowerCase())) out.push(val);
-      }
-    }
-    return out;
-  }
-
-  getChildByRuleName(ctx: any, ruleName: string): any | undefined {
-    const arr = this.getChildrenByRuleName(ctx, ruleName);
-    return arr.length ? arr[0] : undefined;
-  }
-
-  /**
-   * Collect IDs from an idList-like context.
-   * PRESERVES duplicates and returns an array of {name, terminalNode}.
-   */
-  collectIdListPreserve(idListCtx: any): { name: string; terminal: any }[] {
-    const result: { name: string; terminal: any }[] = [];
-    if (!idListCtx) return result;
-    const terms = this.flattenTerminals(idListCtx);
-    for (const t of terms) {
-      if (!t || !t.symbol || !t.symbol.text) continue;
-      const txt = t.symbol.text;
-      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(txt) && !this.reservedKeywords.has(txt)) {
-        result.push({ name: txt, terminal: t });
-      }
-    }
-    return result;
-  }
-
-  collectIdList(idListCtx: any): string[] {
-    // legacy helper that returns unique list — kept for other uses, but NOT used for duplicate detection
-    const ids = new Set<string>();
-    if (!idListCtx) return [];
-    const terms = this.flattenTerminals(idListCtx);
-    for (const t of terms) {
-      if (!t || !t.symbol || !t.symbol.text) continue;
-      const txt = t.symbol.text;
-      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(txt) && !this.reservedKeywords.has(txt)) ids.add(txt);
-    }
-    return Array.from(ids);
-  }
-
-  collectUsedBaseIds(exprCtx: any): string[] {
-    const ids = new Set<string>();
-    if (!exprCtx) return [];
-    const nodes = this.flattenNodes(exprCtx);
-    for (const n of nodes) {
-      if (!n) continue;
-      if (n.constructor && n.constructor.name && n.constructor.name.toLowerCase().includes('path')) {
-        const base = this.collectBaseIdsFromPath(n);
-        for (const b of base) ids.add(b);
-      }
-      if (n.symbol && n.symbol.text && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(n.symbol.text) && !this.reservedKeywords.has(n.symbol.text)) {
-        ids.add(n.symbol.text);
-      }
-    }
-    return Array.from(ids);
-  }
-
-  collectBaseIdsFromPath(pathCtx: any): string[] {
-    const out: string[] = [];
-    if (!pathCtx) return out;
-    const terms = this.flattenTerminals(pathCtx);
-    for (const t of terms) {
-      if (!t || !t.symbol || !t.symbol.text) continue;
-      const txt = t.symbol.text;
-      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(txt) && !this.reservedKeywords.has(txt)) {
-        out.push(txt);
-        break;
-      }
-    }
-    return out;
-  }
-
-  locationOfNode(ctx: any): { line: number; column: number; system?: string; feature?: string } {
-    try {
-      const terms = this.flattenTerminals(ctx);
-      if (terms.length) {
-        const t = terms[0] as any;
-        return { line: t.symbol.line, column: t.symbol.charPositionInLine, system: this.currentSystem, feature: this.currentFeature };
-      }
-    } catch {}
-    return { line: 0, column: 0, system: this.currentSystem, feature: this.currentFeature };
-  }
-
-  /**
-   * Robust scan of feature children to collect input/output identifiers.
-   * Uses collectIdListPreserve to detect duplicates within the same declaration.
-   */
-  private collectInputOutputFromFeature(ctx: any, symbols: SymbolTable) {
-    if (!ctx) return;
-
-    // 1) preferred direct children approach (inputDecl / outputDecl contexts)
-    const inputDecls = this.getChildrenByRuleName(ctx, 'inputDecl');
-    for (const idc of inputDecls) {
-      // preserve duplicates
-      const pairs = this.collectIdListPreserve(idc);
-      const seenLocal = new Set<string>();
-      for (const p of pairs) {
-        const id = p.name;
-        // if previously seen in this same declaration or earlier in this feature -> duplicate
-        if (seenLocal.has(id) || symbols.inputs.has(id)) {
-          // use terminal to get precise location
-          const loc = p.terminal && p.terminal.symbol ? { line: p.terminal.symbol.line, column: p.terminal.symbol.charPositionInLine } : this.locationOfNode(idc);
-          this.safeReport({
-            severity: 'error',
-            code: 'DUPLICATE_INPUT',
-            message: `Input '${id}' declared multiple times in feature '${this.currentFeature}'.`,
-            location: { line: loc.line, column: loc.column, system: this.currentSystem, feature: this.currentFeature },
-            recommendation: `Remove duplicate declaration of '${id}'.`,
-            meta: { variable: id },
-          });
-        }
-        seenLocal.add(id);
-        symbols.inputs.add(id);
-      }
-    }
-
-    const outputDecls = this.getChildrenByRuleName(ctx, 'outputDecl');
-    for (const odc of outputDecls) {
-      const pairs = this.collectIdListPreserve(odc);
-      const seenLocal = new Set<string>();
-      for (const p of pairs) {
-        const id = p.name;
-        if (seenLocal.has(id) || symbols.outputs.has(id)) {
-          const loc = p.terminal && p.terminal.symbol ? { line: p.terminal.symbol.line, column: p.terminal.symbol.charPositionInLine } : this.locationOfNode(odc);
-          this.safeReport({
-            severity: 'error',
-            code: 'DUPLICATE_OUTPUT',
-            message: `Output '${id}' declared multiple times in feature '${this.currentFeature}'.`,
-            location: { line: loc.line, column: loc.column, system: this.currentSystem, feature: this.currentFeature },
-            recommendation: `Remove duplicate declaration of '${id}'.`,
-            meta: { variable: id },
-          });
-        }
-        seenLocal.add(id);
-        symbols.outputs.add(id);
-      }
-    }
-
-    // 2) fallback: scan children tokens sequence (handles alternate AST shapes)
-    if (!Array.isArray(ctx.children)) return;
-    const children = ctx.children;
-    for (let i = 0; i < children.length; i++) {
-      const ch = children[i];
-      if (!ch) continue;
-      if (ch.symbol && typeof ch.symbol.text === 'string') {
-        const txt = ch.symbol.text;
-        if (txt === 'input' || txt === 'output') {
-          const isInput = txt === 'input';
-          let found: any = null;
-          for (let j = i + 1; j < Math.min(children.length, i + 8); j++) {
-            const nxt = children[j];
-            if (!nxt) continue;
-            if (nxt.constructor && nxt.constructor.name && nxt.constructor.name.toLowerCase().includes('idlist')) {
-              found = nxt; break;
-            }
-            if (nxt.symbol && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(nxt.symbol.text) && !this.reservedKeywords.has(nxt.symbol.text)) {
-              found = { children: [nxt] }; break;
-            }
-          }
-          if (found) {
-            const pairs = this.collectIdListPreserve(found);
-            const seenLocal = new Set<string>();
-            for (const p of pairs) {
-              const id = p.name;
-              if (seenLocal.has(id) || (isInput ? symbols.inputs.has(id) : symbols.outputs.has(id))) {
-                const loc = p.terminal && p.terminal.symbol ? { line: p.terminal.symbol.line, column: p.terminal.symbol.charPositionInLine } : this.locationOfNode(found);
-                this.safeReport({
-                  severity: 'error',
-                  code: isInput ? 'DUPLICATE_INPUT' : 'DUPLICATE_OUTPUT',
-                  message: `${isInput ? 'Input' : 'Output'} '${id}' declared multiple times in feature '${this.currentFeature}'.`,
-                  location: { line: loc.line, column: loc.column, system: this.currentSystem, feature: this.currentFeature },
-                  recommendation: `Remove duplicate declaration of '${id}'.`,
-                  meta: { variable: id },
-                });
-              }
-              seenLocal.add(id);
-              if (isInput) symbols.inputs.add(id); else symbols.outputs.add(id);
-            }
-          }
-        }
-      }
     }
   }
 
-  // dedupe and push
-  private safeReport(d: Diagnostic) {
-    const sig = [
-      d.code,
-      d.message,
-      d.location ? `${d.location.line}:${d.location.column}` : '',
-      d.location?.system || this.currentSystem || '',
-      d.location?.feature || this.currentFeature || ''
-    ].join('|');
-    if (this.reportedSignatures.has(sig)) return;
-    this.reportedSignatures.add(sig);
-    this.diagnostics.push(d);
+  private report(
+    severity: Severity,
+    code: string,
+    message: string,
+    ctx?: any,
+    recommendation?: string
+  ) {
+    const loc = ctx ? this.terminals(ctx)[0]?.symbol : undefined;
+    this.diagnostics.push({
+      severity,
+      code,
+      message,
+      location: loc ? {
+        line: loc.line,
+        column: loc.charPositionInLine,
+        system: this.currentSystem,
+        feature: this.currentFeature
+      } : undefined,
+      recommendation
+    });
   }
 }

@@ -3,227 +3,199 @@ grammar Spec;
 options { language = TypeScript; }
 
 // ======================================================
-// 1. GLOBAL ERROR HANDLING & MEMBERS
+// 1. PARSER MEMBERS (Error handling)
 // ======================================================
 
 @parser::members {
-    // FIX: Menambahkan '?' pada parameter agar opsional (mencegah error TypeScript build)
-    public override notifyErrorListeners(msg: any, offendingToken?: any, e?: any): void {
-        const location = offendingToken && offendingToken.line !== undefined
-            ? ` at line ${offendingToken.line}, column ${offendingToken.charPositionInLine}`
-            : "";
-        
-        super.notifyErrorListeners("Syntax Error" + location + ": " + msg, offendingToken, e);
-    }
+  public override notifyErrorListeners(msg: any, offendingToken?: any, e?: any): void {
+    const location = offendingToken && offendingToken.line !== undefined
+      ? ` at line ${offendingToken.line}, column ${offendingToken.charPositionInLine}`
+      : "";
+    super.notifyErrorListeners("Syntax Error" + location + ": " + msg, offendingToken, e);
+  }
 }
 
-// @lexer::members TELAH DIHAPUS UNTUK MEMPERBAIKI BUILD ERROR
-
 // ======================================================
-// 2. TOP LEVEL STRUCTURE (Struktur Utama)
+// 2. TOP-LEVEL STRUCTURE
 // ======================================================
 
 specification
-    @after {
-        // Slot kosong untuk semantic analysis
-    }
-    : systemDecl+ EOF
-    ;
+  : systemDecl+ EOF
+  ;
 
 systemDecl
-    : SYSTEM name=ID '{' features+=featureDecl+ '}' 
-    ;
+  : SYSTEM ID '{' featureDecl+ '}'
+  ;
 
 featureDecl
-    : FEATURE name=ID '{'
-        ( inputDecl         
-        | outputDecl        
-        | valueDecl         
-        | freeExprDecl      
-        | preconditionDecl  
-        | postconditionDecl 
-        | ruleDecl          
-        | testObligationDecl 
-        )*
-      '}'
-    ;
+  : FEATURE ID '{'
+      ( inputDecl
+      | outputDecl
+      | preconditionDecl
+      | postconditionDecl
+      | ruleDecl
+      )*
+    '}'
+  ;
 
 // ======================================================
-// 3. DECLARATIONS (Deklarasi Data)
+// 3. DECLARATIONS
 // ======================================================
 
-inputDecl   : INPUT ':' ids=idList ;
-outputDecl  : OUTPUT ':' ids=idList ;
+inputDecl
+  : INPUT ':' idList
+  ;
 
-valueDecl
-    : ID ':' expr           
-    ;
+outputDecl
+  : OUTPUT ':' idList
+  ;
 
-freeExprDecl
-    : expr                  
-    ;
+preconditionDecl
+  : PRECONDITION ':' expr
+  ;
 
-preconditionDecl    : PRECONDITION ':' condition=expr ;
-postconditionDecl   : POSTCONDITION ':' condition=expr ;
-testObligationDecl  : TEST_OBLIGATION ':' (STRING | expr) ;
+postconditionDecl
+  : POSTCONDITION ':' expr
+  ;
 
 // ======================================================
-// 4. RULES & LOGIC (Logika Bisnis)
+// 4. RULES
 // ======================================================
 
 ruleDecl
-    : RULE name=ID ':' ifThenEffect annotations=annotation*
-    ;
+  : RULE ID ':' ifThenEffect
+  ;
 
 ifThenEffect
-    : IF condition=expr THEN effects=effectList
-    ;
+  : IF expr THEN DO effectBlock
+  ;
 
-effectList
-    : effect ( (',' | ';') effect )*
-    ;
-
-effect
-    : assignmentEffect
-    | actionEffect
-    ;
+effectBlock
+  : assignmentEffect+
+  ;
 
 assignmentEffect
-    : left=path '=' right=expr
-    ;
-
-actionEffect
-    : functionCall
-    | DO actionName=ID
-    ;
-
-functionCall
-    : ID '(' (argList)? ')'
-    ;
+  : path EQ expr
+  ;
 
 // ======================================================
-// 5. EXPRESSIONS (Matematika & Logika)
+// 5. EXPRESSIONS (LOGIC + ARITHMETIC)
 // ======================================================
 
-expr : orExpr ;
+expr
+  : orExpr
+  ;
 
-orExpr : andExpr ( OR andExpr )* ;
-andExpr : notExpr ( AND notExpr )* ;
+orExpr
+  : andExpr (OR andExpr)*
+  ;
+
+andExpr
+  : notExpr (AND notExpr)*
+  ;
 
 notExpr
-    : NOT notExpr       
-    | relationalExpr
-    ;
+  : NOT notExpr
+  | relationalExpr
+  ;
 
 relationalExpr
-    : additiveExpr ( compOp additiveExpr )?
-    ;
+  : additiveExpr (compOp additiveExpr)?
+  ;
 
 additiveExpr
-    : multiplicativeExpr ( ('+'|'-') multiplicativeExpr )*
-    ;
+  : multiplicativeExpr ((PLUS | MINUS) multiplicativeExpr)*
+  ;
 
 multiplicativeExpr
-    : unaryExpr ( ('*'|'/') unaryExpr )*
-    ;
+  : unaryExpr ((STAR | SLASH) unaryExpr)*
+  ;
 
 unaryExpr
-    : ('+'|'-') unaryExpr
-    | primaryExpr
-    ;
+  : (PLUS | MINUS) unaryExpr
+  | primaryExpr
+  ;
 
 primaryExpr
-    : '(' expr ')'      
-    | path              
-    | literal           
-    ;
+  : '(' expr ')'
+  | path
+  | literal
+  ;
 
 // ======================================================
-// 6. HELPERS (Komponen Pendukung)
+// 6. HELPERS
 // ======================================================
 
-idList : ID (',' ID)* ;
-argList : expr (',' expr)* ;
+idList
+  : ID (',' ID)*
+  ;
 
 path
-    : ID ( ('.' ID) | ('[' expr ']') | ('?.' ID) )*
-    ;
-
-annotation
-    : '@' ID ('(' annotationArgs? ')')?
-    ;
-
-annotationArgs
-    : annotationArg (',' annotationArg)*
-    ;
-
-annotationArg
-    : ID '=' expr
-    | expr
-    ;
+  : ID ('.' ID | '[' expr ']')*
+  ;
 
 literal
-    : NUMBER
-    | FLOAT
-    | STRING
-    | BooleanLiteral
-    | arrayLiteral
-    | objectLiteral
-    ;
+  : NUMBER
+  | FLOAT
+  | STRING
+  | BOOLEAN
+  ;
 
-arrayLiteral : '[' (expr (',' expr)*)? ']' ;
-objectLiteral : '{' (objectPair (',' objectPair)*)? '}' ;
-objectPair : (STRING | ID) ':' expr ;
-
-compOp : '==' | '!=' | '>=' | '<=' | '>' | '<' ;
+compOp
+  : EQEQ | NEQ | GTE | LTE | GT | LT
+  ;
 
 // ======================================================
-// 7. LEXER TOKENS (Kosakata Bahasa)
+// 7. LEXER TOKENS
 // ======================================================
 
-SYSTEM          : 'system';
-FEATURE         : 'feature';
-INPUT           : 'input';
-OUTPUT          : 'output';
-PRECONDITION    : 'precondition';
-POSTCONDITION   : 'postcondition';
-TEST_OBLIGATION : 'test_obligation';
-RULE            : 'rule';
-IF              : 'if';
-THEN            : 'then';
-DO              : 'do';
-AND             : 'and';
-OR              : 'or';
-NOT             : 'not';
+// --- Keywords
+SYSTEM        : 'system';
+FEATURE       : 'feature';
+INPUT         : 'input';
+OUTPUT        : 'output';
+PRECONDITION  : 'precondition';
+POSTCONDITION : 'postcondition';
+RULE          : 'rule';
+IF            : 'if';
+THEN          : 'then';
+DO            : 'do';
+AND           : 'and';
+OR            : 'or';
+NOT           : 'not';
+BOOLEAN       : 'true' | 'false';
 
-NUMBER : [0-9]+ ;
-FLOAT  : [0-9]+ '.' [0-9]+ ;
+// --- Operators
+PLUS   : '+';
+MINUS  : '-';
+STAR   : '*';
+SLASH  : '/';
 
-BooleanLiteral : 'true' | 'false' ;
+EQ     : '=';
+EQEQ   : '==';
+NEQ    : '!=';
+GTE    : '>=';
+LTE    : '<=';
+GT     : '>';
+LT     : '<';
+
+// --- Literals
+NUMBER : [0-9]+;
+FLOAT  : [0-9]+ '.' [0-9]+;
 
 STRING
-    : '"' ( ~["\\] | '\\' . )* '"'
-    ;
+  : '"' ( ~["\\] | '\\' . )* '"'
+  ;
 
-ID : [a-zA-Z_][a-zA-Z_0-9]* ;
+// --- Identifiers
+ID : [a-zA-Z_][a-zA-Z_0-9]*;
 
-LPAREN  : '(' ;
-RPAREN  : ')' ;
-LBRACE  : '{' ;
-RBRACE  : '}' ;
-LBRACK  : '[' ;
-RBRACK  : ']' ;
-COMMA   : ',' ;
-COLON   : ':' ;
-SEMI    : ';' ;
-DOT     : '.' ;
-QMARK   : '?' ;
-EQ      : '=' ;
+// --- Whitespace & Comments
+WS            : [ \t\r\n]+ -> skip;
+LINE_COMMENT  : '//' ~[\r\n]* -> skip;
+BLOCK_COMMENT : '/*' .*? '*/' -> skip;
 
-WS : [ \t\r\n]+ -> skip ;
-LINE_COMMENT : '//' ~[\r\n]* -> skip ;
-BLOCK_COMMENT : '/*' .*? '*/' -> skip ;
-
+// --- Error
 ERROR_CHAR
-    : . { throw new Error("Invalid character: '" + this.text + "'"); }
-    ;
+  : . { throw new Error("Invalid character: '" + this.text + "'"); }
+  ;
