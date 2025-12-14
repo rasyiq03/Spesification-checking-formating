@@ -15,6 +15,3 @@ export class SyntaxErrorListener implements ANTLRErrorListener<any> {
         );
     }
 }
-
-// parser.removeErrorListeners();
-// parser.addErrorListener(new SyntaxErrorListener());
