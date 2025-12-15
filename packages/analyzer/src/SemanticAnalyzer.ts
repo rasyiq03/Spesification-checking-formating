@@ -1,301 +1,180 @@
-/**
- * SemanticAnalyzer for Requirement Specification DSL
- *
- * Purpose:
- * - Detect requirement defects early (ambiguity, inconsistency, incompleteness)
- *
- * Academic basis:
- * - Sommerville (2016): Software Engineering
- * - ISO/IEC/IEEE 29148:2018
- * - Fowler (2011): Domain-Specific Languages
- */
-
-import { CommonTokenStream } from 'antlr4ts';
+import { AbstractParseTreeVisitor } from 'antlr4ts/tree/AbstractParseTreeVisitor';
 import { TerminalNode } from 'antlr4ts/tree';
+import { Diagnostic, SymbolTable } from './types';
 
-export type Severity = 'error' | 'warning' | 'info';
+// Import generated files (sesuaikan path dengan struktur folder Anda)
+import { SpecVisitor } from './parser/SpecVisitor'; 
+import * as P from './parser/SpecParser'; 
 
-export interface Diagnostic {
-  severity: Severity;
-  code: string;
-  message: string;
-  location?: {
-    line: number;
-    column: number;
-    system?: string;
-    feature?: string;
-    rule?: string;
-  };
-  recommendation?: string;
-}
+export class SemanticAnalyzer extends AbstractParseTreeVisitor<void> implements SpecVisitor<void> {
+  public diagnostics: Diagnostic[] = [];
+  private tables = new Map<string, SymbolTable>(); // Key: "System::Feature"
 
-interface SymbolTable {
-  inputs: Set<string>;     // read-only
-  outputs: Set<string>;    // writable
-  rules: Set<string>;
-  used: Set<string>;
-}
+  private currentSystem: string = '';
+  private currentFeature: string = '';
 
-/**
- * NOTE:
- * Analyzer intentionally avoids type inference or execution semantics.
- * This DSL validates requirement quality, not behavior.
- */
-export class SemanticAnalyzer {
-
-  private diagnostics: Diagnostic[] = [];
-  private tables = new Map<string, SymbolTable>();
-
-  private currentSystem?: string;
-  private currentFeature?: string;
-
-  private readonly keywords = new Set([
-    'system','feature','input','output','rule',
-    'if','then','do','and','or','not','true','false'
-  ]);
-
-  constructor(private tokens: CommonTokenStream) {}
-
-  // =============================
-  // ENTRY POINT
-  // =============================
-
-  analyze(ast: any): Diagnostic[] {
+  /**
+   * Entry Point utama analisis
+   */
+  public analyze(tree: P.SpecificationContext): Diagnostic[] {
     this.reset();
-
-    const systems = this.find(ast, 'systemDecl');
-    systems.forEach(s => this.visitSystem(s));
-
+    this.visit(tree); // Memulai traversal otomatis dari root
     this.checkUnusedInputs();
     return this.diagnostics;
   }
 
+  protected defaultResult(): void {}
+
   private reset() {
     this.diagnostics = [];
     this.tables.clear();
-    this.currentSystem = undefined;
-    this.currentFeature = undefined;
+    this.currentSystem = '';
+    this.currentFeature = '';
   }
 
-  // =============================
-  // SYSTEM / FEATURE
-  // =============================
+  // ==========================================================
+  // VISITOR METHODS (Override method bawaan ANTLR)
+  // ==========================================================
 
-  private visitSystem(ctx: any) {
-    this.currentSystem = this.extractId(ctx) ?? '<system>';
-
-    this.find(ctx, 'featureDecl')
-      .forEach(f => this.visitFeature(f));
-
-    this.currentSystem = undefined;
+  // 1. Masuk ke System Declaration
+  visitSystemDecl(ctx: P.SystemDeclContext) {
+    this.currentSystem = ctx.ID().text;
+    this.visitChildren(ctx); // Lanjut kunjungi anak-anaknya (Feature, dll)
+    this.currentSystem = '';
   }
 
-  private visitFeature(ctx: any) {
-    const feature = this.extractId(ctx) ?? '<feature>';
-    this.currentFeature = feature;
-
-    const key = `${this.currentSystem}::${feature}`;
-    const table: SymbolTable = {
+  // 2. Masuk ke Feature Declaration
+  visitFeatureDecl(ctx: P.FeatureDeclContext) {
+    this.currentFeature = ctx.ID().text;
+    
+    // Inisialisasi Symbol Table untuk scope ini
+    const key = this.getScopeKey();
+    this.tables.set(key, {
       inputs: new Set(),
       outputs: new Set(),
       rules: new Set(),
       used: new Set()
-    };
-    this.tables.set(key, table);
-
-    this.collectIO(ctx, table);
-    this.find(ctx, 'ruleDecl').forEach(r => this.visitRule(r, table));
-
-    this.currentFeature = undefined;
-  }
-
-  // =============================
-  // INPUT / OUTPUT
-  // =============================
-
-  /**
-   * Academic justification:
-   * - Duplicate declaration causes ambiguity (ISO 29148)
-   */
-  private collectIO(ctx: any, table: SymbolTable) {
-    this.collectDecl(ctx, 'inputDecl', table.inputs, 'DUPLICATE_INPUT');
-    this.collectDecl(ctx, 'outputDecl', table.outputs, 'DUPLICATE_OUTPUT');
-  }
-
-  private collectDecl(ctx: any, rule: string, target: Set<string>, code: string) {
-    this.find(ctx, rule).forEach(d => {
-      this.ids(d).forEach(id => {
-        if (target.has(id)) {
-          this.report('error', code,
-            `'${id}' declared multiple times`,
-            d,
-            `Remove duplicate declaration of '${id}'`
-          );
-        }
-        target.add(id);
-      });
     });
+
+    this.visitChildren(ctx); // Lanjut kunjungi input, output, rules
+    this.currentFeature = '';
   }
 
-  // =============================
-  // RULE
-  // =============================
+  // 3. Masuk ke Input Declaration
+  visitInputDecl(ctx: P.InputDeclContext) {
+    const table = this.getCurrentTable();
+    if (!table) return;
 
-  /**
-   * Rules define system behavior declaratively.
-   * Names must be unique for traceability.
-   */
-  private visitRule(ctx: any, table: SymbolTable) {
-    const name = this.extractId(ctx) ?? '<rule>';
-
-    if (table.rules.has(name)) {
-      this.report('warning','DUPLICATE_RULE_NAME',
-        `Rule '${name}' duplicated`,
-        ctx,
-        'Ensure rule names are unique'
-      );
-    }
-    table.rules.add(name);
-
-    // Condition
-    this.find(ctx,'condition')
-      .forEach(c => this.checkUsage(c, table));
-
-    // Effect
-    this.find(ctx,'assignmentEffect')
-      .forEach(e => this.checkAssignment(e, table, name));
-  }
-
-  // =============================
-  // SEMANTIC CHECKS
-  // =============================
-
-  /**
-   * Undefined variable → incomplete requirement
-   */
-  private checkUsage(ctx: any, table: SymbolTable) {
-    this.ids(ctx).forEach(id => {
-      if (!table.inputs.has(id) && !table.outputs.has(id)) {
-        this.report('error','UNDEFINED_VARIABLE',
-          `Variable '${id}' not declared`,
-          ctx,
-          `Declare '${id}' as input or output`
-        );
-      } else {
-        table.used.add(id);
+    // ctx.idList().ID() mengembalikan array node ID
+    for (const node of ctx.idList().ID()) {
+      const name = node.text;
+      if (table.inputs.has(name)) {
+        this.report('error', 'DUPLICATE_INPUT', `Input '${name}' declared multiple times`, node.symbol);
       }
-    });
-  }
-
-  /**
-   * Assigning to input violates requirement responsibility
-   */
-  private checkAssignment(ctx: any, table: SymbolTable, rule: string) {
-    const left = this.find(ctx,'path')[0];
-    if (!left) return;
-
-    const id = this.ids(left)[0];
-    if (!id) return;
-
-    if (table.inputs.has(id) && !table.outputs.has(id)) {
-      this.report('error','ASSIGN_TO_READONLY',
-        `Input '${id}' assigned in rule '${rule}'`,
-        left,
-        `Move '${id}' to output`
-      );
+      table.inputs.add(name);
     }
   }
 
-  // =============================
-  // UNUSED INPUT
-  // =============================
+  // 4. Masuk ke Output Declaration
+  visitOutputDecl(ctx: P.OutputDeclContext) {
+    const table = this.getCurrentTable();
+    if (!table) return;
 
-  /**
-   * Over-specification → informational warning
-   */
+    for (const node of ctx.idList().ID()) {
+      const name = node.text;
+      if (table.outputs.has(name)) {
+        this.report('error', 'DUPLICATE_OUTPUT', `Output '${name}' declared multiple times`, node.symbol);
+      }
+      table.outputs.add(name);
+    }
+  }
+
+  // 5. Masuk ke Rule Declaration
+  visitRuleDecl(ctx: P.RuleDeclContext) {
+    const table = this.getCurrentTable();
+    if (!table) return;
+
+    const ruleName = ctx.ID().text;
+    if (table.rules.has(ruleName)) {
+      this.report('warning', 'DUPLICATE_RULE', `Rule name '${ruleName}' is duplicated`, ctx.start);
+    }
+    table.rules.add(ruleName);
+
+    this.visitChildren(ctx); // Lanjut cek expression di dalam rule
+  }
+
+  // 6. Masuk ke Path (Penggunaan Variabel)
+  visitPath(ctx: P.PathContext) {
+    const table = this.getCurrentTable();
+    if (!table) return;
+
+    // Path bentuknya "user.id". Kita ambil root variablenya ("user")
+    const rootVarNode = ctx.ID()[0]; 
+    const rootVarName = rootVarNode.text;
+
+    // Cek 1: Apakah variabel didefinisikan?
+    if (!table.inputs.has(rootVarName) && !table.outputs.has(rootVarName)) {
+      this.report('error', 'UNDEFINED_VAR', `Variable '${rootVarName}' is not defined in input/output`, rootVarNode.symbol, `Add '${rootVarName}' to declarations`);
+    } else {
+      table.used.add(rootVarName);
+    }
+
+    // Cek 2: Apakah kita sedang mencoba mengubah (assign) nilai Input?
+    // Logika: Jika parent adalah AssignmentEffect, dan path ini ada di posisi kiri (assignment target)
+    if (ctx.parent instanceof P.AssignmentEffectContext) {
+      // AssignmentEffect strukturnya: path EQ expr
+      // Kita cek apakah 'ctx' ini adalah path yang dimaksud di parent
+      if (ctx.parent.path() === ctx) {
+        if (table.inputs.has(rootVarName) && !table.outputs.has(rootVarName)) {
+          this.report('error', 'READONLY_ASSIGN', `Cannot assign to input variable '${rootVarName}'`, rootVarNode.symbol, `Move '${rootVarName}' to output`);
+        }
+      }
+    }
+
+    this.visitChildren(ctx); // Cek jikalau ada array index berupa expression
+  }
+
+  // ==========================================================
+  // HELPERS
+  // ==========================================================
+
+  private getScopeKey() {
+    return `${this.currentSystem}::${this.currentFeature}`;
+  }
+
+  private getCurrentTable(): SymbolTable | undefined {
+    return this.tables.get(this.getScopeKey());
+  }
+
   private checkUnusedInputs() {
-    this.tables.forEach((t, key) => {
+    this.tables.forEach((table, key) => {
       const [sys, feat] = key.split('::');
-      this.currentSystem = sys;
-      this.currentFeature = feat;
-
-      t.inputs.forEach(i => {
-        if (!t.used.has(i)) {
-          this.report('info','UNUSED_INPUT',
-            `Input '${i}' never used`,
-            undefined,
-            `Consider removing '${i}'`
-          );
+      table.inputs.forEach(input => {
+        if (!table.used.has(input)) {
+          this.diagnostics.push({
+            severity: 'info',
+            code: 'UNUSED_INPUT',
+            message: `Input '${input}' is declared but never used`,
+            location: { line: 0, column: 0, system: sys, feature: feat }, // Lokasi umum
+            recommendation: `Consider removing '${input}'`
+          });
         }
       });
     });
   }
 
-  // =============================
-  // UTILITIES
-  // =============================
-
-  private extractId(ctx: any): string | undefined {
-    return this.ids(ctx)[0];
-  }
-
-  private ids(ctx: any): string[] {
-    const out = new Set<string>();
-    this.terminals(ctx).forEach(t => {
-      const s = t.symbol.text;
-      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && !this.keywords.has(s)) {
-        out.add(s);
-      }
-    });
-    return [...out];
-  }
-
-  private terminals(ctx: any): TerminalNode[] {
-    const out: TerminalNode[] = [];
-    (function walk(n: any) {
-      if (!n) return;
-      if (n.symbol) out.push(n);
-      if (n.children) n.children.forEach(walk);
-    })(ctx);
-    return out;
-  }
-
-  private find(ctx: any, name: string): any[] {
-    const out: any[] = [];
-    for (const k in ctx) {
-      const v = ctx[k];
-      if (!v) continue;
-      if (Array.isArray(v)) v.forEach(x => this.match(x,name,out));
-      else this.match(v,name,out);
-    }
-    return out;
-  }
-
-  private match(node: any, name: string, out: any[]) {
-    if (node?.constructor?.name?.toLowerCase().includes(name.toLowerCase())) {
-      out.push(node);
-    }
-  }
-
-  private report(
-    severity: Severity,
-    code: string,
-    message: string,
-    ctx?: any,
-    recommendation?: string
-  ) {
-    const loc = ctx ? this.terminals(ctx)[0]?.symbol : undefined;
+  private report(severity: 'error'|'warning'|'info', code: string, msg: string, token: any, rec?: string) {
     this.diagnostics.push({
       severity,
       code,
-      message,
-      location: loc ? {
-        line: loc.line,
-        column: loc.charPositionInLine,
+      message: msg,
+      location: {
+        line: token.line,
+        column: token.charPositionInLine,
         system: this.currentSystem,
         feature: this.currentFeature
-      } : undefined,
-      recommendation
+      },
+      recommendation: rec
     });
   }
 }

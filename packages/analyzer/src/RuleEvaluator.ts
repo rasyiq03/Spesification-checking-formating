@@ -1,7 +1,3 @@
-// RuleEvaluator.ts
-// Minimal, deterministic rule interpreter
-// This is the UNIT UNDER TEST (SUT)
-
 export type Context = Record<string, any>;
 export type Output = Record<string, any>;
 

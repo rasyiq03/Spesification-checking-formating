@@ -1,8 +1,7 @@
-// packages/web/pages/api/check.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { CommonTokenStream, CharStreams } from 'antlr4ts';
-import { SpecLexer, SpecParser } from '@spec/analyzer';
-import { SemanticAnalyzer, Diagnostic } from '@spec/analyzer';
+import { SpecLexer, SpecParser } from '@spec/analyzer'; // Sesuaikan path import ini
+import { SemanticAnalyzer, Diagnostic } from '@spec/analyzer'; // Sesuaikan path import ini
 import { generateUnitTestsFromAST } from '../../lib/testGenerator';
 
 type ErrorResponse = { error: string };
@@ -24,9 +23,7 @@ export default function handler(
       return res.status(400).json({ error: 'spec (string) is required' });
     }
 
-    // =====================================
     // 1. Lexing & Parsing
-    // =====================================
     const inputStream = CharStreams.fromString(spec);
     const lexer = new SpecLexer(inputStream);
     const tokenStream = new CommonTokenStream(lexer);
@@ -36,18 +33,8 @@ export default function handler(
     const syntaxErrors: { line: number; column: number; message: string }[] = [];
     parser.removeErrorListeners();
     parser.addErrorListener({
-      syntaxError: (
-        _rec: any,
-        _off: any,
-        line: number,
-        charPositionInLine: number,
-        msg: string
-      ) => {
-        syntaxErrors.push({
-          line,
-          column: charPositionInLine,
-          message: msg
-        });
+      syntaxError: (_rec, _off, line, charPositionInLine, msg) => {
+        syntaxErrors.push({ line, column: charPositionInLine, message: msg });
       }
     });
 
@@ -61,15 +48,12 @@ export default function handler(
       });
     }
 
-    // =====================================
     // 2. Semantic Analysis
-    // =====================================
-    const analyzer = new SemanticAnalyzer(tokenStream);
+    // PERBAIKAN DI SINI: Jangan pass tokenStream ke constructor jika tidak diminta
+    const analyzer = new SemanticAnalyzer(); 
     const diagnostics = analyzer.analyze(tree);
 
-    // =====================================
-    // 3. Unit Test Generation (AST-based)
-    // =====================================
+    // 3. Unit Test Generation
     const unitTests = generateUnitTestsFromAST(tree);
 
     return res.status(200).json({
